@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webapp - Docker Swarm</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background: #0db7ed;
+            color: #fff;
+        }
+        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+        .hostname {
+            font-size: 2rem;
+            font-weight: bold;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 0.5rem 1.5rem;
+            border-radius: 8px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Olá do container!</h1>
+    <p>Você está sendo atendido pelo host:</p>
+    <div class="hostname">__HOSTNAME__</div>
+</body>
+</html>

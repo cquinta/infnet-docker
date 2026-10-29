@@ -1,0 +1,33 @@
+Verify kubectl configuration
+    kubectl cluster-info
+
+Criando basico 
+
+kubectl run nginx --image=nginx
+kubectl expose pod nginx --type=NodePort --port=80
+minikube service nginx
+minikube start --container-runtime=docker
+minikube start --nodes 2
+
+apt-get install dnsutils
+
+kubectl port-forward svc/nginx 8080:80 --address 0.0.0.0
+kubectl port-forward pod/nginx 8080:80 --address 0.0.0.0
+
+kubectl run ubuntu --image=ubuntu
+
+kubectl run ubuntu --image=ubuntu --command -- sleep infinity
+
+apt update && sudo apt install -y iputils-ping
+ping nginx
+PING nginx.default.svc.cluster.local
+
+10-244-0-5.default.pod.cluster.local
+
+minikube addons enable metrics-server
+
+minikube dashboard --url
+
+
+Traduzir para o portugues e colocar em tópicos, não traduza a palavra container fazer a identaçao correta dos manifestos
+

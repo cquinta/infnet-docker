@@ -45,7 +45,7 @@ Você pode criar o security group pelo console da AWS ou via AWS CLI. Abaixo, o 
 SG_ID=$(aws ec2 create-security-group \
   --group-name swarm-sg \
   --description "Security group para cluster Docker Swarm" \
-  --vpc-id vpc-xxxxxxxx \
+  --vpc-id $VPC_ID \
   --query 'GroupId' \
   --output text)
 
@@ -112,7 +112,7 @@ Anote os IPs de cada instância:
 
 | Nó              | IP público (SSH) | IP privado (comunicação do cluster) |
 |-----------------|------------------|-------------------------------------|
-| `swarm-manager` | `<IP_PUB_MANAGER>` | `<IP_PRIV_MANAGER>`               |
+| `swarm-manager` | `<IP_PUB_MANAGER>` | `10-0-0-194`               |
 | `swarm-worker-1`| `<IP_PUB_WORKER1>` | `<IP_PRIV_WORKER1>`               |
 | `swarm-worker-2`| `<IP_PUB_WORKER2>` | `<IP_PRIV_WORKER2>`               |
 
@@ -228,7 +228,84 @@ docker service rm web
 
 ---
 
-## 9. Comandos úteis de manutenção
+## 9. Testar o load balancer do Swarm
+
+O Swarm distribui as requisições entre as réplicas de um serviço através do *routing mesh* + *ingress load balancer*. Para **enxergar** esse balanceamento, o ideal é usar um serviço cuja resposta identifique qual réplica atendeu. A imagem `webapp` deste repositório (`examples/webapp`) faz exatamente isso: ela exibe o **hostname do container** na página, e no Swarm o hostname do container corresponde ao ID da tarefa/réplica.
+
+### 9.1. Publicar a imagem para o cluster
+
+Os nós do Swarm precisam ter acesso à imagem. Escolha uma das opções:
+
+**Opção A — via registry (recomendado):** faça push da imagem para um registry acessível (Docker Hub, ECR etc.).
+
+```bash
+# Na sua máquina (ou no manager), a partir de examples/webapp
+docker build -t <seu-usuario>/webapp:1.0 .
+docker push <seu-usuario>/webapp:1.0
+```
+
+**Opção B — sem registry:** faça o build da imagem em **cada nó** (manager e workers), copiando o diretório `examples/webapp` para todos eles e rodando `docker build -t webapp:1.0 .` em cada um.
+
+### 9.2. Criar o serviço com múltiplas réplicas
+
+No **manager**, crie o serviço com mais réplicas que nós (para garantir várias réplicas por nó) publicando na porta 8080:
+
+```bash
+# Use a tag do registry (Opção A) ou webapp:1.0 (Opção B)
+docker service create \
+  --name webapp \
+  --replicas 6 \
+  -p 8080:80 \
+  <seu-usuario>/webapp:1.0
+
+# Confira em quais nós as réplicas foram distribuídas
+docker service ps webapp
+```
+
+### 9.3. Gerar requisições e observar o balanceamento
+
+Faça várias requisições seguidas ao endpoint publicado. Como o *ingress load balancer* usa round-robin, o hostname retornado deve **alternar** entre as réplicas:
+
+```bash
+# A partir de qualquer nó ou da sua máquina.
+# Extrai apenas a linha com o hostname da página.
+for i in $(seq 1 12); do
+  curl -s http://<IP_PUB_MANAGER>:8080 | grep -o '<div class="hostname">[^<]*' | sed 's/.*>//'
+done
+```
+
+Saída esperada — os hostnames se repetem alternando entre as réplicas, evidenciando o balanceamento:
+
+```
+a1b2c3d4e5f6
+b2c3d4e5f6a1
+c3d4e5f6a1b2
+a1b2c3d4e5f6
+b2c3d4e5f6a1
+...
+```
+
+> Você pode apontar o `curl` para **qualquer** IP do cluster (manager ou worker) na porta 8080 e ainda assim as requisições serão distribuídas entre todas as réplicas. Isso comprova o *routing mesh*: qualquer nó recebe na porta publicada e encaminha para uma réplica disponível.
+
+Se estiver testando pelo navegador, dê vários *refresh* (use Ctrl+F5 para evitar cache) e observe o hostname mudando.
+
+### 9.4. (Opcional) Escalar e observar a mudança
+
+```bash
+# Aumenta para 9 réplicas e repita o teste de requisições
+docker service scale webapp=9
+docker service ps webapp
+```
+
+### 9.5. Remover o serviço de teste
+
+```bash
+docker service rm webapp
+```
+
+---
+
+## 10. Comandos úteis de manutenção
 
 ```bash
 # Ver detalhes de um nó
@@ -257,3 +334,4 @@ docker swarm join-token manager
 4. `docker swarm join` nos 2 workers.
 5. `docker node ls` para confirmar os 3 nós.
 6. `docker service create` para validar o cluster.
+7. Subir o serviço `webapp` com várias réplicas e usar `curl` em loop para ver o load balancer alternando os hostnames.
