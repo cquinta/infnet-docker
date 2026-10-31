@@ -188,10 +188,10 @@ sudo systemctl enable containerd
 sudo apt-get update
 sudo apt-get install -y apt-transport-https ca-certificates curl gpg
 
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | \
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.37/deb/Release.key | \
   sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | \
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.37/deb/ /' | \
   sudo tee /etc/apt/sources.list.d/kubernetes.list
 
 sudo apt-get update
@@ -317,9 +317,9 @@ Saída esperada (todos os nós com status `Ready`):
 
 ```
 NAME           STATUS   ROLES           AGE   VERSION
-k8s-master     Ready    control-plane   5m    v1.30.x
-k8s-worker-1   Ready    <none>          2m    v1.30.x
-k8s-worker-2   Ready    <none>          2m    v1.30.x
+k8s-master     Ready    control-plane   5m    v1.37.x
+k8s-worker-1   Ready    <none>          2m    v1.37.x
+k8s-worker-2   Ready    <none>          2m    v1.37.x
 ```
 
 ---
