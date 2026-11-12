@@ -28,6 +28,11 @@ minikube addons enable metrics-server
 
 minikube dashboard --url
 
+kubectl scale deployments/kubernetes-bootcamp --replicas=4
 
 Traduzir para o portugues e colocar em tópicos, não traduza a palavra container fazer a identaçao correta dos manifestos
 
+
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+kubectl top nodes
