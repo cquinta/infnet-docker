@@ -313,7 +313,201 @@ requests.memory  256Mi   2Gi
 
 ---
 
-## 8. Comandos úteis de observação
+## 8. HPA — Horizontal Pod Autoscaler
+
+O HPA escala automaticamente o número de réplicas de um Deployment com base no consumo de CPU ou memória observado pelo Metrics Server.
+
+### Como funciona
+
+```
+Metrics Server → HPA controller → ajusta replicas do Deployment
+```
+
+O HPA consulta o Metrics Server a cada 15 segundos (padrão) e calcula o número ideal de réplicas:
+
+```
+replicas desejadas = ceil(replicas atuais × (uso atual / meta))
+```
+
+### Deployment base para o teste
+
+```yaml
+# deployment-hpa.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-hpa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-hpa
+  template:
+    metadata:
+      labels:
+        app: app-hpa
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.25
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+```
+
+> O `requests.cpu` é obrigatório — o HPA calcula o percentual de uso em relação ao request, não ao limit.
+
+```bash
+kubectl apply -f deployment-hpa.yaml
+```
+
+### Criar o HPA
+
+**Opção A — via manifesto (recomendado):**
+
+```yaml
+# hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app-hpa
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+```
+
+```bash
+kubectl apply -f hpa.yaml
+```
+
+**Opção B — via kubectl:**
+
+```bash
+kubectl autoscale deployment app-hpa \
+  --cpu-percent=50 \
+  --min=1 \
+  --max=5
+```
+
+### Verificar o estado do HPA
+
+```bash
+kubectl get hpa hpa-app
+```
+
+```
+NAME      REFERENCE            TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+hpa-app   Deployment/app-hpa   2%/50%    1         5         1          30s
+```
+
+> Se `TARGETS` mostrar `<unknown>/50%`, aguarde alguns segundos — o Metrics Server ainda está coletando as primeiras métricas.
+
+### Simular carga para acionar o scale up
+
+Em outro terminal, gere carga contínua no deployment:
+
+```bash
+# Cria um pod temporário que faz requisições em loop
+kubectl run load-generator \
+  --image=busybox:1.36 \
+  --restart=Never \
+  -- sh -c "while true; do wget -q -O- http://app-hpa; done"
+```
+
+Acompanhe o HPA escalando:
+
+```bash
+kubectl get hpa hpa-app -w
+```
+
+```
+NAME      REFERENCE            TARGETS    MINPODS   MAXPODS   REPLICAS
+hpa-app   Deployment/app-hpa   2%/50%     1         5         1
+hpa-app   Deployment/app-hpa   85%/50%    1         5         1
+hpa-app   Deployment/app-hpa   85%/50%    1         5         2
+hpa-app   Deployment/app-hpa   72%/50%    1         5         3
+hpa-app   Deployment/app-hpa   48%/50%    1         5         3
+```
+
+### Remover a carga e observar o scale down
+
+```bash
+kubectl delete pod load-generator
+```
+
+O HPA aguarda 5 minutos (padrão) antes de reduzir réplicas para evitar flapping:
+
+```bash
+kubectl get hpa hpa-app -w
+# Após ~5 minutos REPLICAS voltará para 1
+```
+
+### Inspecionar decisões do HPA
+
+```bash
+kubectl describe hpa hpa-app
+```
+
+A seção `Events` mostra cada decisão de scale:
+
+```
+Events:
+  Type    Reason             Message
+  ----    ------             -------
+  Normal  SuccessfulRescale  New size: 3; reason: cpu resource utilization (percentage of request) above target
+  Normal  SuccessfulRescale  New size: 1; reason: All metrics below target
+```
+
+### HPA com múltiplas métricas (CPU + memória)
+
+```yaml
+# hpa-multi.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-multi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app-hpa
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70
+```
+
+> Com múltiplas métricas, o HPA calcula o número de réplicas para cada métrica separadamente e usa o **maior** valor.
+
+---
+
+## 9. Comandos úteis de observação
 
 ```bash
 # Consumo atual de todos os pods
@@ -340,6 +534,8 @@ kubectl get events --field-selector reason=OOMKilling
 
 ```bash
 kubectl delete pod pod-resources pod-cpu-stress pod-oom pod-guaranteed pod-sem-resources
+kubectl delete deployment app-hpa
+kubectl delete hpa hpa-app hpa-multi
 kubectl delete limitrange limites-padrao
 kubectl delete resourcequota quota-namespace
 ```
@@ -355,3 +551,4 @@ kubectl delete resourcequota quota-namespace
 | `LimitRange` | Namespace | Define padrões e limites por container |
 | `ResourceQuota` | Namespace | Define teto de consumo agregado |
 | `Metrics Server` | Cluster | Habilita `kubectl top` para observação em tempo real |
+| `HPA` | Namespace | Escala réplicas automaticamente com base em métricas de CPU/memória |
