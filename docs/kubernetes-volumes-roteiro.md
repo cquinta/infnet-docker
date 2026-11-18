@@ -400,7 +400,234 @@ kubectl get pvc pvc-wait
 
 ---
 
-## 7. Comandos úteis de inspeção
+---
+
+# Parte 2 — Volumes Efêmeros com emptyDir
+
+## O que é emptyDir?
+
+Um volume `emptyDir` é criado quando o pod é atribuído a um nó e existe enquanto o pod estiver rodando. É deletado permanentemente quando o pod é removido — independente do motivo (crash, deleção, reschedule).
+
+| Característica | Comportamento |
+|----------------|---------------|
+| Criação | Quando o pod é agendado no nó |
+| Deleção | Quando o pod é removido do nó |
+| Sobrevive a restart do container | Sim — o volume persiste entre restarts do container dentro do mesmo pod |
+| Sobrevive a deleção do pod | Não |
+| Compartilhado entre containers | Sim — todos os containers do pod enxergam o mesmo volume |
+
+### Casos de uso
+
+| Caso | Exemplo |
+|------|---------|
+| Cache temporário | Resultados de processamento intermediário |
+| Compartilhar arquivos entre containers | Sidecar que processa logs gerados pelo container principal |
+| Scratch space | Ordenação de grandes datasets em disco |
+
+---
+
+## 8. emptyDir básico — dados sobrevivem ao restart do container
+
+Demonstra que o `emptyDir` persiste entre restarts do container mas não entre deleções do pod.
+
+```yaml
+# pod-emptydir.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-emptydir
+spec:
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "while true; do date >> /cache/log.txt; sleep 5; done"]
+    volumeMounts:
+    - name: cache
+      mountPath: /cache
+  volumes:
+  - name: cache
+    emptyDir: {}
+```
+
+```bash
+kubectl apply -f pod-emptydir.yaml
+
+# Aguardar alguns segundos e verificar o arquivo
+kubectl exec pod-emptydir -- cat /cache/log.txt
+```
+
+Force um restart do container (sem deletar o pod) e confirme que os dados persistem:
+
+```bash
+# Matar o processo principal do container para forçar restart
+kubectl exec pod-emptydir -- kill 1
+
+# Aguardar o container reiniciar
+kubectl get pod pod-emptydir -w
+# RESTARTS vai para 1
+
+# Os dados devem continuar no volume
+kubectl exec pod-emptydir -- cat /cache/log.txt
+```
+
+Agora delete o pod e recrie — os dados devem sumir:
+
+```bash
+kubectl delete pod pod-emptydir
+kubectl apply -f pod-emptydir.yaml
+
+# Arquivo não existe mais
+kubectl exec pod-emptydir -- ls /cache/
+# (vazio)
+```
+
+---
+
+## 9. emptyDir compartilhado entre containers (sidecar)
+
+O caso de uso mais comum do `emptyDir` — um container produz dados e outro os consome via volume compartilhado.
+
+```yaml
+# pod-sidecar.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-sidecar
+spec:
+  containers:
+  - name: produtor
+    image: busybox:1.36
+    command: ["sh", "-c", "while true; do echo "$(date) - evento" >> /logs/app.log; sleep 3; done"]
+    volumeMounts:
+    - name: logs
+      mountPath: /logs
+  - name: consumidor
+    image: busybox:1.36
+    command: ["sh", "-c", "tail -f /logs/app.log"]
+    volumeMounts:
+    - name: logs
+      mountPath: /logs
+  volumes:
+  - name: logs
+    emptyDir: {}
+```
+
+```bash
+kubectl apply -f pod-sidecar.yaml
+
+# Ver os logs do container consumidor lendo o arquivo gerado pelo produtor
+kubectl logs pod-sidecar -c consumidor -f
+```
+
+```
+Mon Jan 01 00:00:03 UTC 2025 - evento
+Mon Jan 01 00:00:06 UTC 2025 - evento
+Mon Jan 01 00:00:09 UTC 2025 - evento
+```
+
+Confirme que ambos os containers enxergam o mesmo arquivo:
+
+```bash
+kubectl exec pod-sidecar -c produtor -- ls /logs/
+# app.log
+
+kubectl exec pod-sidecar -c consumidor -- ls /logs/
+# app.log
+```
+
+---
+
+## 10. emptyDir com limite de tamanho
+
+Por padrão o `emptyDir` pode crescer até ocupar todo o disco do nó. Use `sizeLimit` para restringir o tamanho — quando o limite é atingido o pod é evicted.
+
+```yaml
+# pod-emptydir-limit.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-emptydir-limit
+spec:
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "dd if=/dev/urandom of=/cache/arquivo bs=1M count=200; sleep 3600"]
+    volumeMounts:
+    - name: cache
+      mountPath: /cache
+  volumes:
+  - name: cache
+    emptyDir:
+      sizeLimit: 100Mi
+```
+
+```bash
+kubectl apply -f pod-emptydir-limit.yaml
+
+# Acompanhar o pod sendo evicted ao ultrapassar 100Mi
+kubectl get pod pod-emptydir-limit -w
+```
+
+```
+NAME                 READY   STATUS    RESTARTS   AGE
+pod-emptydir-limit   1/1     Running   0          5s
+pod-emptydir-limit   0/1     Evicted   0          12s
+```
+
+Confirme o motivo do eviction:
+
+```bash
+kubectl describe pod pod-emptydir-limit | grep -A5 "Reason\|Message"
+# The node was low on resource: ephemeral-storage
+```
+
+---
+
+## 11. emptyDir em memória (tmpfs)
+
+Definindo `medium: Memory`, o `emptyDir` é montado como `tmpfs` — armazenado na RAM em vez do disco. Mais rápido, mas consome memória do container.
+
+```yaml
+# pod-emptydir-memory.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-emptydir-memory
+spec:
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "df -h /cache; sleep 3600"]
+    resources:
+      limits:
+        memory: "128Mi"
+    volumeMounts:
+    - name: cache
+      mountPath: /cache
+  volumes:
+  - name: cache
+    emptyDir:
+      medium: Memory
+      sizeLimit: 64Mi
+```
+
+```bash
+kubectl apply -f pod-emptydir-memory.yaml
+
+# Confirmar que o volume está montado como tmpfs
+kubectl exec pod-emptydir-memory -- df -h /cache
+```
+
+```
+Filesystem      Size  Used Avail Use% Mounted on
+tmpfs            64M     0   64M   0% /cache
+```
+
+> O `sizeLimit` com `medium: Memory` é obrigatório — sem ele o tmpfs pode consumir toda a memória disponível no nó.
+
+---
+
+## 12. Comandos úteis de inspeção
 
 ```bash
 # Listar todos os PVs do cluster
@@ -425,6 +652,7 @@ kubectl get events --field-selector reason=ProvisioningFailed
 
 ## Limpeza
 
+**Parte 1 — Volumes Persistentes:**
 ```bash
 kubectl delete pod pod-pvc-dinamico pod-pvc-estatico pod-wait
 kubectl delete deployment app-com-volume
@@ -433,9 +661,16 @@ kubectl delete pv pv-estatico
 kubectl delete storageclass standard-wait
 ```
 
+**Parte 2 — emptyDir:**
+```bash
+kubectl delete pod pod-emptydir pod-sidecar pod-emptydir-limit pod-emptydir-memory
+```
+
 ---
 
 ## Resumo
+
+**Parte 1 — Volumes Persistentes:**
 
 | Objeto | Criado por | Quando usar |
 |--------|-----------|-------------|
@@ -444,3 +679,12 @@ kubectl delete storageclass standard-wait
 | `Retain` | Administrador | Dados críticos que não podem ser deletados automaticamente |
 | `Delete` | Padrão dinâmico | Ambientes efêmeros onde os dados seguem o ciclo do PVC |
 | `WaitForFirstConsumer` | Administrador | Clusters multi-nó onde o scheduler deve escolher o nó antes do volume |
+
+**Parte 2 — emptyDir:**
+
+| Configuração | Quando usar |
+|--------------|-------------|
+| `emptyDir: {}` | Cache temporário, scratch space |
+| `emptyDir` compartilhado | Comunicação entre containers do mesmo pod (sidecar) |
+| `sizeLimit` | Evitar que o volume consuma todo o disco do nó |
+| `medium: Memory` | Necessidade de I/O muito rápido — dados sensíveis que não devem ir ao disco |
