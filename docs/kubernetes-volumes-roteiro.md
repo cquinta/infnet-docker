@@ -439,8 +439,20 @@ metadata:
 spec:
   containers:
   - name: app
-    image: busybox:1.36
-    command: ["sh", "-c", "while true; do date >> /cache/log.txt; sleep 5; done"]
+    image: alpine:3.19
+    command:
+    - sh
+    - -c
+    - |
+      while true; do
+        date >> /cache/log.txt
+        sleep 5
+        COUNT=$((COUNT+1))
+        if [ "$COUNT" -ge 5 ]; then
+          echo "saindo para forcar restart"
+          exit 1
+        fi
+      done
     volumeMounts:
     - name: cache
       mountPath: /cache
@@ -449,26 +461,39 @@ spec:
     emptyDir: {}
 ```
 
+> O container escreve 5 entradas no log e sai com `exit 1`. O kubelet detecta a falha e reinicia o container automaticamente. O volume `emptyDir` pertence ao pod, não ao container — por isso os dados sobrevivem ao restart.
+
 ```bash
 kubectl apply -f pod-emptydir.yaml
 
-# Aguardar alguns segundos e verificar o arquivo
-kubectl exec pod-emptydir -- cat /cache/log.txt
+# Acompanhar o container reiniciando automaticamente após ~25 segundos
+kubectl get pod pod-emptydir -w
 ```
 
-Force um restart do container (sem deletar o pod) e confirme que os dados persistem:
+```
+NAME           READY   STATUS    RESTARTS   AGE
+pod-emptydir   1/1     Running   0          5s
+pod-emptydir   0/1     Error     0          28s
+pod-emptydir   1/1     Running   1          29s
+pod-emptydir   0/1     Error     1          57s
+pod-emptydir   1/1     Running   2          58s
+```
+
+Confirme que os dados acumularam entre os restarts:
 
 ```bash
-# Matar o processo principal do container para forçar restart
-kubectl exec pod-emptydir -- kill 1
-
-# Aguardar o container reiniciar
-kubectl get pod pod-emptydir -w
-# RESTARTS vai para 1
-
-# Os dados devem continuar no volume
 kubectl exec pod-emptydir -- cat /cache/log.txt
 ```
+
+```
+Mon Jan 01 00:00:05 UTC 2025
+Mon Jan 01 00:00:10 UTC 2025
+...
+Mon Jan 01 00:00:35 UTC 2025   <- entradas do segundo ciclo
+Mon Jan 01 00:00:40 UTC 2025
+```
+
+> O PID 1 dentro de um container tem proteção especial do kernel contra SIGKILL — não é possível matá-lo de dentro do próprio container. A forma correta de demonstrar o restart é deixar o processo sair naturalmente com código de erro.
 
 Agora delete o pod e recrie — os dados devem sumir:
 
